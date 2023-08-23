@@ -1,35 +1,41 @@
 use aws_lambda_events::event::s3::{S3Entity, S3Event};
 use aws_sdk_s3::Client as S3Client;
+use handlebars::Handlebars;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use routefinder::Router;
 use tracing::*;
 
+use std::collections::HashMap;
+
 async fn function_handler(event: LambdaEvent<S3Event>, client: &S3Client) -> Result<(), Error> {
     let input_pattern =
         std::env::var("INPUT_PATTERN").expect("You must define INPUT_PATTERN in the environment");
-    let output_pattern =
-        std::env::var("OUTPUT_PATTERN").expect("You must define OUTPUT_PATTERN in the environment");
+    let output_template = std::env::var("OUTPUT_TEMPLATE")
+        .expect("You must define OUTPUT_TEMPLATE in the environment");
 
     let mut router = Router::new();
+    let mut hb = Handlebars::new();
+    hb.register_template_string("output", &output_template)?;
+
     router.add(input_pattern, 1)?;
     info!("Processing records: {event:?}");
 
     for entity in entities_from(event.payload)? {
         debug!("Processing {entity:?}");
         if let Some(source_key) = entity.object.url_decoded_key {
-            if let Some(output_key) = object_output_from(&router, &output_pattern, &source_key) {
-                info!("Copying {source_key:?} to {output_key:?}");
-                if let Some(bucket) = entity.bucket.name {
-                    debug!("Sending a copy request for {bucket} with {source_key} to {output_key}");
-                    let result = client
-                        .copy_object()
-                        .bucket(&bucket)
-                        .copy_source(format!("{bucket}/{source_key}"))
-                        .key(output_key)
-                        .send()
-                        .await?;
-                    debug!("Copied object: {result:?}");
-                }
+            let parameters = add_builtin_parameters(captured_parameters(&router, &source_key)?);
+            let output_key = hb.render("output", &parameters)?;
+            info!("Copying {source_key:?} to {output_key:?}");
+            if let Some(bucket) = entity.bucket.name {
+                debug!("Sending a copy request for {bucket} with {source_key} to {output_key}");
+                let result = client
+                    .copy_object()
+                    .bucket(&bucket)
+                    .copy_source(format!("{bucket}/{source_key}"))
+                    .key(output_key)
+                    .send()
+                    .await?;
+                debug!("Copied object: {result:?}");
             }
         }
     }
@@ -87,51 +93,33 @@ fn entities_from(event: S3Event) -> Result<Vec<S3Entity>, anyhow::Error> {
 }
 
 /**
- * Use the provided router to take the `source_key` and translate that to the right output key.
- * Will return `None` if no match can be found.
- *
- * The parameters of the matcher added to the router must match _exactly_ what is provided in the
- * output pattern ,with the exception of the `:ignore` pattern which can be added to ignore certain
- * path segments.
- *
- * ```rust
- * # use routefinder::Router;
- * let source_key = "some/uuid-12309123/testdb/2023/05/foo.parquet";
- * let input_pattern = "some/;ignore/:root/:year/:ignore/:filename";
- * let output_pattern = "archive/:root/:year/:filename";
- * let mut router = Router::new();
- * let _ = router.add(input_pattern, 1);
- *
- * let output = object_output_from(&router, output_pattern, source_key);
- * assert_eq!(output, Some("/archive/testdb/2023/foo.parquet"));
- * ```
+ * Take the source key and the already configured router in order to access a collection of
+ * captured parameters in a HashMap format
  */
-fn object_output_from<Handler>(
+fn captured_parameters<Handler>(
     router: &Router<Handler>,
-    output_pattern: &str,
     source_key: &str,
-) -> Option<String> {
-    debug!("Considering moving {source_key} to {output_pattern}");
+) -> Result<HashMap<String, String>, anyhow::Error> {
     let matches = router.matches(source_key);
-    if matches.len() == 0 {
-        warn!("{source_key} does not match any thing in the router: {router:?}");
-        return None;
+    let mut data: HashMap<String, String> = HashMap::new();
+    for capture in matches[0].captures().into_iter() {
+        data.insert(capture.name().into(), capture.value().into());
     }
-    let binding = matches[0]
-        .captures()
-        .into_iter()
-        .filter(|capt| capt.name() != "ignore")
-        .collect();
-    debug!("Considering the captures for route: {binding:?}");
-    let spec = routefinder::RouteSpec::try_from(output_pattern).unwrap();
-    match routefinder::ReverseMatch::new(&binding, &spec) {
-        Some(reversed) => {
-            let object = format!("{}", reversed);
-            // Drop the initial / of the "URL"
-            Some(object[1..].into())
-        }
-        None => None,
-    }
+    Ok(data)
+}
+
+fn add_builtin_parameters(mut data: HashMap<String, String>) -> HashMap<String, String> {
+    use chrono::Datelike;
+    let now = chrono::Utc::now();
+    data.insert("year".into(), format!("{}", now.year()));
+    data.insert("month".into(), format!("{}", now.month()));
+    data.insert("day".into(), format!("{}", now.day()));
+    data.insert("ds".into(), format!("{}", now.format("%Y-%m-%d")));
+    data.insert(
+        "region".into(),
+        std::env::var("AWS_REGION").unwrap_or("unknown".into()),
+    );
+    data
 }
 
 #[cfg(test)]
@@ -139,9 +127,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_add_builtins() {
+        let data = add_builtin_parameters(HashMap::new());
+        assert!(data.contains_key("year"), "builtins needs `year`");
+        assert!(data.contains_key("month"), "builtins needs `month`");
+        assert!(data.contains_key("day"), "builtins needs `day`");
+        assert!(data.contains_key("ds"), "builtins needs `ds`");
+        assert!(data.contains_key("region"), "builtins needs `region`");
+    }
+
+    #[test]
     fn test_input_router() -> Result<(), anyhow::Error> {
         let input_pattern = "path/:ignore/:database/:table/1/:filename";
-        let output_pattern = "databases/:database/:table/:filename";
         let source_key = "path/testing-2023-08-18-07-05-df7d7bcc-3160-50da-8c4c-26952b11a4c/testdb/public.test_table/1/foobar.snappy.parquet";
 
         let mut router = Router::new();
@@ -154,20 +151,6 @@ mod tests {
             matches[0].captures().get("filename"),
             Some("foobar.snappy.parquet")
         );
-
-        let output_key = object_output_from(&router, output_pattern, source_key);
-        assert!(
-            output_key.is_some(),
-            "Expected our contrived source_key to have an output"
-        );
-        if let Some(output_key) = output_key {
-            assert_eq!(
-                "databases/testdb/public.test_table/foobar.snappy.parquet",
-                output_key
-            );
-        } else {
-            assert!(false);
-        }
         Ok(())
     }
 

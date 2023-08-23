@@ -62,9 +62,9 @@ The following environment variables must be set for the function to run properly
 | _required but empty by default_
 | A prefix mapping that is compatible with the link:https://docs.rs/routefinder/0.5.3/routefinder/[routefinder] syntax, e.g. `some/prefix/with/:name/:filename` which makes the `name` and `filename`  parameters available in the output path.
 
-| `OUTPUT_PATTERN`
+| `OUTPUT_TEMPLATE`
 | _required byt empty by default_
-| A routefinder compatiblee path for rewriting the objects which match the `INPUT_MATCH` pattern, e.g. `archive/:name/:filename`
+| A link:https://docs.rs/handlebars/4.3.7/handlebars/index.html[handlebars] template which produces a compatible path for outputting the file into the S3 bucket
 
 |===
 
@@ -74,6 +74,37 @@ The parameters must all be present and match in the input and output patterns.
 If there are variable segments of the `INPUT_PATTERN` which must be ignored, use the
 special `:ignore` parameter name to ignore that segment but still allow it to match the output pattern
 ====
+
+==== Handlebars built-ins
+
+There are a few special patterns which are available for the `OUTPUT_TEMPLATE`
+to make it easy to provide more natural dynamic outputs.
+
+|===
+| Name | Value | Notes
+
+| `year`
+| Current year (UTC)
+|
+
+| `month`
+| Current month (UTC)
+|
+
+| `day`
+| Current day (UTC)
+|
+
+| `ds`
+| Date stamp (UTC)
+| Formatted with `%Y-%m-%d` e.g. `2023-08-21`
+
+| `region`
+| AWS Region defined by runtime
+| The value of `AWS_REGION` or `unknown` if that variable is not available
+
+|===
+
 
 == Licensing
 
