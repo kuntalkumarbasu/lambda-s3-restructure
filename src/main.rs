@@ -2,8 +2,9 @@ use aws_lambda_events::event::s3::{S3Entity, S3Event};
 use aws_sdk_s3::Client as S3Client;
 use handlebars::Handlebars;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
+use log::*;
 use routefinder::Router;
-use tracing::*;
+//use tracing::*;
 
 use std::collections::HashMap;
 
@@ -22,7 +23,7 @@ async fn function_handler(event: LambdaEvent<S3Event>, client: &S3Client) -> Res
 
     for entity in entities_from(event.payload)? {
         debug!("Processing {entity:?}");
-        if let Some(source_key) = entity.object.url_decoded_key {
+        if let Some(source_key) = entity.object.key {
             let parameters = add_builtin_parameters(captured_parameters(&router, &source_key)?);
             let output_key = hb.render("output", &parameters)?;
             info!("Copying {source_key:?} to {output_key:?}");
@@ -70,25 +71,12 @@ async fn main() -> Result<(), Error> {
  */
 
 fn entities_from(event: S3Event) -> Result<Vec<S3Entity>, anyhow::Error> {
-    let expected_event = Some("ObjectCreated:Put".into());
     Ok(event
         .records
         .into_iter()
-        // only bother with the record if the eventName is `objectCreated:Put`
         // only bother with the record if the key is present
-        .filter(|record| record.event_name == expected_event && record.s3.object.key.is_some())
-        .map(|record| {
-            let mut entity = record.s3;
-            info!("Mapping the entity: {entity:?}");
-            /*
-             * For whatever reasson aws_lambda_events doesn't properly make this url_decoded_key
-             * actually available
-             */
-            if let Ok(decoded) = urlencoding::decode(&entity.object.key.as_ref().unwrap()) {
-                entity.object.url_decoded_key = Some(decoded.into_owned());
-            }
-            entity
-        })
+        .filter(|r| r.s3.object.key.is_some())
+        .map(|r| r.s3)
         .collect())
 }
 
@@ -159,24 +147,7 @@ mod tests {
         let event = load_test_event()?;
         let objects = entities_from(event)?;
         assert_eq!(objects.len(), 1);
-        assert!(objects[0].object.url_decoded_key.is_some());
-
-        if let Some(key) = &objects[0].object.url_decoded_key {
-            assert_eq!(key, "test/key");
-        } else {
-            assert!(false, "Failed to decode the key properly");
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn entities_from_with_nonput() -> Result<(), anyhow::Error> {
-        let mut event = load_test_event()?;
-        event.records[0].event_name = Some("s3:ObjectRemoved:Delete".into());
-
-        let objects = entities_from(event)?;
-        assert_eq!(objects.len(), 0);
+        assert!(objects[0].object.key.is_some());
 
         Ok(())
     }
