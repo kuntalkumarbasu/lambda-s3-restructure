@@ -1,10 +1,8 @@
 use aws_lambda_events::event::s3::{S3Entity, S3Event};
 use aws_sdk_s3::Client as S3Client;
-use handlebars::Handlebars;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
-use log::*;
 use routefinder::Router;
-//use tracing::*;
+use tracing::log::*;
 
 use std::collections::HashMap;
 
@@ -15,17 +13,19 @@ async fn function_handler(event: LambdaEvent<S3Event>, client: &S3Client) -> Res
         .expect("You must define OUTPUT_TEMPLATE in the environment");
 
     let mut router = Router::new();
-    let mut hb = Handlebars::new();
-    hb.register_template_string("output", &output_template)?;
+    let template = liquid::ParserBuilder::with_stdlib()
+        .build()?
+        .parse(&output_template)?;
 
     router.add(input_pattern, 1)?;
     info!("Processing records: {event:?}");
 
     for entity in entities_from(event.payload)? {
         debug!("Processing {entity:?}");
+
         if let Some(source_key) = entity.object.key {
             let parameters = add_builtin_parameters(captured_parameters(&router, &source_key)?);
-            let output_key = hb.render("output", &parameters)?;
+            let output_key = template.render(&parameters)?;
             info!("Copying {source_key:?} to {output_key:?}");
             if let Some(bucket) = entity.bucket.name {
                 debug!("Sending a copy request for {bucket} with {source_key} to {output_key}");
@@ -46,9 +46,8 @@ async fn function_handler(event: LambdaEvent<S3Event>, client: &S3Client) -> Res
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    pretty_env_logger::init();
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         // disable printing the name of the module in every log line.
         .with_target(false)
         // disabling time is handy because CloudWatch will add the ingestion time.
@@ -198,5 +197,28 @@ mod tests {
 
         let event: S3Event = serde_json::from_str(&raw_buf)?;
         Ok(event)
+    }
+
+    /**
+     * Quickly validate that the liquid rendering of things works properly
+     */
+    #[test]
+    fn test_rendering() {
+        let template = liquid::ParserBuilder::with_stdlib()
+            .build()
+            .unwrap()
+            .parse("databases/{{database}}/{{table | remove:'public.'}}/ds={{ds}}/{{filename}}")
+            .unwrap();
+        let mut parameters: HashMap<String, String> = HashMap::new();
+        parameters = add_builtin_parameters(parameters);
+        parameters.insert("database".into(), "oltp".into());
+        parameters.insert("table".into(), "public.a_table".into());
+        parameters.insert("filename".into(), "some.parquet".into());
+        parameters.insert("ds".into(), "2023-09-05".into());
+        let output_key = template.render(&parameters).unwrap();
+        assert_eq!(
+            output_key,
+            "databases/oltp/a_table/ds=2023-09-05/some.parquet"
+        );
     }
 }
