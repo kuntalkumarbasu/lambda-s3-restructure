@@ -1,5 +1,5 @@
 use aws_lambda_events::event::s3::{S3Entity, S3Event,S3EventRecord};
-use deltalake::{DeltaResult, ObjectMeta, Path};
+use deltalake::{DeltaResult};
 use aws_sdk_s3::Client as S3Client;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use routefinder::Router;
@@ -60,13 +60,13 @@ async fn s3_from_sqs(event: SqsEvent) -> DeltaResult<Vec<S3EventRecord>> {
 }
 
 
-async fn function_handler(event: LambdaEvent<S3Event>, client: &S3Client) -> Result<(), Error> {
+async fn function_handler(event: LambdaEvent<SqsEvent>, client: &S3Client) -> Result<(), Error> {
     let input_pattern =
         std::env::var("INPUT_PATTERN").expect("You must define INPUT_PATTERN in the environment");
     let output_template = std::env::var("OUTPUT_TEMPLATE")
         .expect("You must define OUTPUT_TEMPLATE in the environment");
 
-    let records = s3_from_sqs(event.payload)?;
+    let records = s3_from_sqs(event.payload);
 
     let mut router = Router::new();
     let template = liquid::ParserBuilder::with_stdlib()
