@@ -3,10 +3,64 @@ use aws_sdk_s3::Client as S3Client;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use routefinder::Router;
 use tracing::log::*;
+use aws_lambda_events::sqs::SqsEvent;
+// use deltalake::{DeltaResult};
 
 use std::collections::HashMap;
 
-async fn function_handler(event: LambdaEvent<S3Event>, client: &S3Client) -> Result<(), Error> {
+
+/// A simple structure to make deserializing test events for identification easier
+///
+/// See <fhttps://github.com/buoyant-data/oxbow/issues/8>
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct TestEvent {
+    event: String,
+}
+
+
+/// Convert the given [aws_lambda_events::sqs::SqsEvent] to a collection of
+///  [aws_lambda_events::s3::S3EventRecord] entities. This is mostly useful for handling S3 Bucket
+///  Notifications which have been passed into SQS
+///
+///  In the case where the [aws_lambda_events::sqs::SqsEvent] contains an `s3:TestEvent` which is
+///  fired when S3 Bucket Notifications are first enabled, the event will be ignored to avoid
+///  errorsin the processing pipeline
+async fn s3_from_sqs(event: SqsEvent) -> Result<S3Event,anyhow::Error> {
+    let mut records = vec![];
+    for record in event.records.iter() {
+        /* each record is an SqsMessage */
+        if let Some(body) = &record.body {
+            match serde_json::from_str::<S3Event>(body) {
+                Ok(s3event) => {
+                    for s3record in s3event.records {
+                        records.push(s3record.clone());
+                    }
+                }
+                Err(err) => {
+                    // if we cannot deserialize and the event is an s3::TestEvent, then we should
+                    // just return empty records.
+                    let test_event = serde_json::from_str::<TestEvent>(body);
+                    // Early exit with the original error if we cannot parse the JSON at all
+                    if test_event.is_err() {
+                        return Err(err.into());
+                    }
+
+                    // Ignore the error on deserialization if the event ends up being an S3
+                    // TestEvent which is fired when bucket notifications are originally configured
+                    if "s3:TestEvent" != test_event.unwrap().event {
+                        return Err(err.into());
+                    }
+                }
+            };
+        }
+    }
+    Ok(aws_lambda_events::s3::S3Event { records: records })
+}
+
+
+
+async fn function_handler(event: LambdaEvent<SqsEvent>, client: &S3Client) -> Result<(), Error> {
     let input_pattern =
         std::env::var("INPUT_PATTERN").expect("You must define INPUT_PATTERN in the environment");
     let output_template = std::env::var("OUTPUT_TEMPLATE")
@@ -18,9 +72,9 @@ async fn function_handler(event: LambdaEvent<S3Event>, client: &S3Client) -> Res
         .parse(&output_template)?;
 
     router.add(input_pattern, 1)?;
-    info!("Processing records: {event:?}");
+    let records = s3_from_sqs(event.payload);
 
-    for entity in entities_from(event.payload)? {
+    for entity in entities_from(records.await?)? {
         debug!("Processing {entity:?}");
 
         if let Some(source_key) = entity.object.key {
