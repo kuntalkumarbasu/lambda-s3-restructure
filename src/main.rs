@@ -4,7 +4,6 @@ use aws_sdk_s3::Client as S3Client;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use routefinder::Router;
 use tracing::log::*;
-use aws_lambda_events::sns::SnsMessage;
 use aws_lambda_events::sqs::SqsEvent;
 
 
@@ -77,7 +76,7 @@ async fn function_handler(event: LambdaEvent<S3Event>, client: &S3Client) -> Res
     router.add(input_pattern, 1)?;
     info!("Processing records: {event:?}");
 
-    for entity in entities_from(&records)? {
+    for entity in entities_from(records)? {
         debug!("Processing {entity:?}");
 
         if let Some(source_key) = entity.object.key {
