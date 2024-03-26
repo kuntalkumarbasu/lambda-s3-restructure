@@ -73,9 +73,8 @@ async fn function_handler(event: LambdaEvent<SqsEvent>, client: &S3Client) -> Re
 
     router.add(input_pattern, 1)?;
     let records = s3_from_sqs(event.payload);
-    debug!("processing records: {records:?}");
 
-    for entity in entities_from(records?)? {
+    for entity in entities_from(records.await?)? {
         debug!("Processing {entity:?}");
 
         if let Some(source_key) = entity.object.key {
