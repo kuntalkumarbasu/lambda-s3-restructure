@@ -1,11 +1,10 @@
-use aws_lambda_events::event::s3::{S3Entity, S3Event,S3EventRecord};
-use deltalake::{DeltaResult};
+use aws_lambda_events::event::s3::{S3Entity, S3Event};
 use aws_sdk_s3::Client as S3Client;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use routefinder::Router;
 use tracing::log::*;
 use aws_lambda_events::sqs::SqsEvent;
-
+// use deltalake::{DeltaResult};
 
 use std::collections::HashMap;
 
@@ -27,7 +26,7 @@ struct TestEvent {
 ///  In the case where the [aws_lambda_events::sqs::SqsEvent] contains an `s3:TestEvent` which is
 ///  fired when S3 Bucket Notifications are first enabled, the event will be ignored to avoid
 ///  errorsin the processing pipeline
-async fn s3_from_sqs(event: SqsEvent) -> DeltaResult<Vec<S3EventRecord>> {
+async fn s3_from_sqs(event: SqsEvent) -> Result<S3Event,anyhow::Error> {
     let mut records = vec![];
     for record in event.records.iter() {
         /* each record is an SqsMessage */
@@ -56,8 +55,9 @@ async fn s3_from_sqs(event: SqsEvent) -> DeltaResult<Vec<S3EventRecord>> {
             };
         }
     }
-    Ok(records)
+    Ok(aws_lambda_events::s3::S3Event { records: records })
 }
+
 
 
 async fn function_handler(event: LambdaEvent<SqsEvent>, client: &S3Client) -> Result<(), Error> {
@@ -66,17 +66,16 @@ async fn function_handler(event: LambdaEvent<SqsEvent>, client: &S3Client) -> Re
     let output_template = std::env::var("OUTPUT_TEMPLATE")
         .expect("You must define OUTPUT_TEMPLATE in the environment");
 
-    let records = s3_from_sqs(event.payload);
-
     let mut router = Router::new();
     let template = liquid::ParserBuilder::with_stdlib()
         .build()?
         .parse(&output_template)?;
 
     router.add(input_pattern, 1)?;
-    info!("Processing records: {event:?}");
+    let records = s3_from_sqs(event.payload);
+    debug!("processing records: {records:?}");
 
-    for entity in entities_from(records)? {
+    for entity in entities_from(records?)? {
         debug!("Processing {entity:?}");
 
         if let Some(source_key) = entity.object.key {
@@ -125,7 +124,7 @@ async fn main() -> Result<(), Error> {
  * put in this invocation
  */
 
-fn entities_from(records: &[S3EventRecord]) -> Result<Vec<S3Entity>, anyhow::Error> {
+fn entities_from(event: S3Event) -> Result<Vec<S3Entity>, anyhow::Error> {
     Ok(event
         .records
         .into_iter()
