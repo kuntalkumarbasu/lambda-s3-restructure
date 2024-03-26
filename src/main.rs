@@ -1,4 +1,5 @@
-use aws_lambda_events::event::s3::{S3Entity, S3Event};
+use aws_lambda_events::event::s3::{S3Entity, S3Event,S3EventRecord};
+use deltalake::{DeltaResult, ObjectMeta, Path};
 use aws_sdk_s3::Client as S3Client;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use routefinder::Router;
