@@ -10,6 +10,17 @@ use aws_lambda_events::sqs::SqsEvent;
 
 use std::collections::HashMap;
 
+
+/// A simple structure to make deserializing test events for identification easier
+///
+/// See <fhttps://github.com/buoyant-data/oxbow/issues/8>
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct TestEvent {
+    event: String,
+}
+
+
 /// Convert the given [aws_lambda_events::sqs::SqsEvent] to a collection of
 ///  [aws_lambda_events::s3::S3EventRecord] entities. This is mostly useful for handling S3 Bucket
 ///  Notifications which have been passed into SQS
