@@ -125,7 +125,7 @@ async fn main() -> Result<(), Error> {
  * put in this invocation
  */
 
-fn entities_from(event: S3Event) -> Result<Vec<S3Entity>, anyhow::Error> {
+fn entities_from(records: &[S3EventRecord]) -> Result<Vec<S3Entity>, anyhow::Error> {
     Ok(event
         .records
         .into_iter()
