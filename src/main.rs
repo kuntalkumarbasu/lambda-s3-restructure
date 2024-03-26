@@ -3,7 +3,6 @@ use aws_sdk_s3::Client as S3Client;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use routefinder::Router;
 use tracing::log::*;
-use aws_lambda_events::s3::{S3Event, S3EventRecord, S3Object};
 use aws_lambda_events::sns::SnsMessage;
 use aws_lambda_events::sqs::SqsEvent;
 

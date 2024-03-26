@@ -11,7 +11,7 @@ authors = [
 anyhow = "1.0.75"
 aws-config = "0.56.0"
 aws-sdk-s3 = "0.29.0"
-aws_lambda_events = { version = "0.10.0", default-features = false, features = ["s3"] }
+aws_lambda_events = { version = "0.12.0", default-features = false, features = ["sns", "sqs", "s3"] }
 chrono = "0.4.26"
 liquid = "0.26"
 
