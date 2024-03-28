@@ -1,13 +1,11 @@
 use aws_lambda_events::event::s3::{S3Entity, S3Event};
+use aws_lambda_events::sqs::SqsEvent;
 use aws_sdk_s3::Client as S3Client;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use routefinder::Router;
 use tracing::log::*;
-use aws_lambda_events::sqs::SqsEvent;
-// use deltalake::{DeltaResult};
 
 use std::collections::HashMap;
-
 
 /// A simple structure to make deserializing test events for identification easier
 ///
@@ -18,7 +16,6 @@ struct TestEvent {
     event: String,
 }
 
-
 /// Convert the given [aws_lambda_events::sqs::SqsEvent] to a collection of
 ///  [aws_lambda_events::s3::S3EventRecord] entities. This is mostly useful for handling S3 Bucket
 ///  Notifications which have been passed into SQS
@@ -26,7 +23,7 @@ struct TestEvent {
 ///  In the case where the [aws_lambda_events::sqs::SqsEvent] contains an `s3:TestEvent` which is
 ///  fired when S3 Bucket Notifications are first enabled, the event will be ignored to avoid
 ///  errorsin the processing pipeline
-async fn s3_from_sqs(event: SqsEvent) -> Result<S3Event,anyhow::Error> {
+fn s3_from_sqs(event: SqsEvent) -> Result<S3Event, anyhow::Error> {
     let mut records = vec![];
     for record in event.records.iter() {
         /* each record is an SqsMessage */
@@ -55,12 +52,13 @@ async fn s3_from_sqs(event: SqsEvent) -> Result<S3Event,anyhow::Error> {
             };
         }
     }
-    Ok(aws_lambda_events::s3::S3Event { records: records })
+    Ok(aws_lambda_events::s3::S3Event { records })
 }
 
-
-
-async fn function_handler(event: LambdaEvent<SqsEvent>, client: &S3Client) -> Result<(), Error> {
+async fn function_handler(
+    event: LambdaEvent<serde_json::Value>,
+    client: &S3Client,
+) -> Result<(), Error> {
     let input_pattern =
         std::env::var("INPUT_PATTERN").expect("You must define INPUT_PATTERN in the environment");
     let output_template = std::env::var("OUTPUT_TEMPLATE")
@@ -72,9 +70,13 @@ async fn function_handler(event: LambdaEvent<SqsEvent>, client: &S3Client) -> Re
         .parse(&output_template)?;
 
     router.add(input_pattern, 1)?;
-    let records = s3_from_sqs(event.payload);
 
-    for entity in entities_from(records.await?)? {
+    let records = match serde_json::from_value::<SqsEvent>(event.payload.clone()) {
+        Ok(sqs_event) => s3_from_sqs(sqs_event)?,
+        Err(_) => serde_json::from_value(event.payload)?,
+    };
+
+    for entity in entities_from(records)? {
         debug!("Processing {entity:?}");
 
         if let Some(source_key) = entity.object.key {
@@ -116,13 +118,10 @@ async fn main() -> Result<(), Error> {
     run(func).await
 }
 
-/**
- * Return the deserialized and useful objects from the event payload
- *
- * This function will apply a filter to make sure that it is only return objects which have been
- * put in this invocation
- */
-
+/// Return the deserialized and useful objects from the event payload
+///
+/// This function will apply a filter to make sure that it is only return objects which have been
+/// put in this invocation
 fn entities_from(event: S3Event) -> Result<Vec<S3Entity>, anyhow::Error> {
     Ok(event
         .records
@@ -133,10 +132,8 @@ fn entities_from(event: S3Event) -> Result<Vec<S3Entity>, anyhow::Error> {
         .collect())
 }
 
-/**
- * Take the source key and the already configured router in order to access a collection of
- * captured parameters in a HashMap format
- */
+/// Take the source key and the already configured router in order to access a collection of
+/// captured parameters in a HashMap format
 fn captured_parameters<Handler>(
     router: &Router<Handler>,
     source_key: &str,
