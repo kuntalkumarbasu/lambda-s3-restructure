@@ -12,7 +12,6 @@ anyhow = "1.0.75"
 aws-config = "0.56.0"
 aws-sdk-s3 = "0.29.0"
 aws_lambda_events = { version = "0.12.0", default-features = false, features = ["sns", "sqs", "s3"] }
-deltalake = { version = "0.16.5", features = ["s3", "json"]}
 chrono = "0.4.31"
 liquid = "0.26"
 serde = { version = "=1", features = ["rc"] }
